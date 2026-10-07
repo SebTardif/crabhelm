@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Resume and buffer early AWS runtime WebSocket messages without letting closed or overflowing reconnects evict a healthy runtime. Thanks @SebTardif.
 - Keep deletion-time workspace inspection from relaunching the appliance installer. Thanks @SebTardif.
 - Report capped GitHub member imports as truncated even when the final page is short. Thanks @SebTardif.
 - Fix duplicate Slack replies when Cloudflare cleanup overlaps a replayed runtime completion, while preserving failed-delivery retries.

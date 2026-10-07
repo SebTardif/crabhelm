@@ -89,6 +89,8 @@ Persona identity, baseline instructions, skill manifests, capability policy, and
 
 ## Deployment adapters
 
+The AWS runtime WebSocket resumes after authentication and buffers early messages until coordinator attachment completes. The pre-attachment buffer is capped at eight frames and 256 KiB. A closed or overflowed replacement cannot evict an established runtime; admitted messages are processed in order before `runtime.ready`.
+
 `ChildCoreProvider` is the placement boundary:
 
 - `provision` allocates an isolated resource;

@@ -207,6 +207,30 @@ test("socket attach rejects cross-claw identity and replaces only the same runti
   assert.equal((await coordinator.runtimeStatus()).connected, 2);
 });
 
+test("a closed replacement cannot evict the connected runtime during attachment", async () => {
+  const pool = new FakePool(({ sql }) => {
+    if (sql.includes("reset_generation")) return { rows: [{ reset_generation: "0" }], rowCount: 1 };
+    if (sql.includes("COUNT(*)::text AS count")) return { rows: [{ count: "0" }], rowCount: 1 };
+    return { rows: [], rowCount: 0 };
+  });
+  const coordinator = directory(pool).getByName("claw-a");
+  const first = new FakeSocket();
+  const identity = { runtimeId: "runtime-a", clawId: "claw-a", refreshJti: "refresh-a" };
+  await coordinator.attachSocket(first, identity);
+  const releases = () => pool.queries.filter(({ sql }) => sql.includes("status = 'offered'")).length;
+  const before = releases();
+  const replacement = new FakeSocket();
+  coordinator.observeSocket(replacement);
+  const attaching = coordinator.attachSocket(replacement, { ...identity, refreshJti: "refresh-b" });
+  for (const listener of replacement.listeners.get("close") ?? []) listener();
+  await attaching;
+
+  assert.deepEqual(first.closes, []);
+  assert.deepEqual(replacement.sent, []);
+  assert.equal((await coordinator.runtimeStatus()).connected, 1);
+  assert.equal(releases(), before);
+});
+
 test("removal tombstones the claw and atomically revokes runtime credentials", async () => {
   let removed = false;
   const pool = new FakePool(({ sql, values }) => {
