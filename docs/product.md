@@ -96,6 +96,8 @@ An installation may also expose authenticated Prometheus-compatible fleet metric
 
 Typed-name confirmation starts a staged removal. Crabhelm disables ingress, verifies zero active work twice across a quiet period, releases the exact provider workspace, confirms absence, revokes the exact control link, and retains redacted audit evidence.
 
+Workspace inspection during removal checks provider identity and absence without relaunching the appliance installer or reconciling desired configuration.
+
 ## Current implementation scope
 
 - Alternative control-plane deployments: the reference Cloudflare Worker, Durable Object, R2, Queue, and Access stack; or a separate singleton ECS/Fargate, ALB, PostgreSQL RDS, S3, SQS, and ALB OIDC stack on AWS.

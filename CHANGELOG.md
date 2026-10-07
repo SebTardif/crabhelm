@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Keep deletion-time workspace inspection from relaunching the appliance installer. Thanks @SebTardif.
 - Report capped GitHub member imports as truncated even when the final page is short. Thanks @SebTardif.
 - Fix duplicate Slack replies when Cloudflare cleanup overlaps a replayed runtime completion, while preserving failed-delivery retries.
 - Refresh AWS SDK and development dependencies, pin pnpm to 11.25.0, update the AWS control-plane container to Node.js 22.23.2, and apply the AWS credentials Action's account-ID handling and retry fixes.

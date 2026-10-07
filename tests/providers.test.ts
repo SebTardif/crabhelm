@@ -336,6 +336,52 @@ test("Crabbox provider delegates standalone lifecycle evidence to its workspace 
   assert.deepEqual(calls, ["disable", "drain", "revoke"]);
 });
 
+test("ready Crabbox deletion inspect does not relaunch the installer", async () => {
+  const claw = createClawRecord({
+    name: "Deleting",
+    owner: { subject: "github:deleting", label: "@deleting", source: "github" },
+  });
+  claw.observed.lifecycle = {
+    workspaceId: "crabhelm-deleting",
+    responseDigest: "b".repeat(64),
+  };
+  let inspections = 0;
+  const provider = new CrabboxChildCoreProvider({
+    baseUrl: "https://crabbox.example.test",
+    token: "test-token",
+    profile: "openclaw-core",
+    ttlSeconds: 14_400,
+    idleTimeoutSeconds: 14_400,
+    workspaceBootstrap: {
+      async command() {
+        return "echo launch";
+      },
+      async inspect() {
+        inspections += 1;
+        return { ready: false, message: "installer relaunched" };
+      },
+    },
+    fetch: async () => Response.json({
+      workspace: {
+        id: "crabhelm-deleting",
+        status: "ready",
+        attachUrl: "wss://crabbox.example.test/attach",
+      },
+    }),
+  });
+
+  const paused = await provider.inspect(claw, { reconcileDesired: false });
+  assert.equal(inspections, 0);
+  assert.notEqual(paused.absent, true);
+  assert.match(paused.message ?? "", /installer reconciliation is paused/u);
+  assert.equal(paused.lifecycle, claw.observed.lifecycle);
+
+  const live = await provider.inspect(claw);
+  assert.equal(inspections, 1);
+  assert.equal(live.phase, "enrolling");
+  assert.equal(live.message, "installer relaunched");
+});
+
 test("standalone workspace keeps central Slack ingress out of the child", async () => {
   const claw = createClawRecord({
     name: "Slack standalone",
