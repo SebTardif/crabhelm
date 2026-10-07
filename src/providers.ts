@@ -357,6 +357,15 @@ export class CrabboxChildCoreProvider implements ChildCoreProvider {
       throw operationalError("CRABBOX_WORKSPACE_FAILED", `Crabbox workspace reported failure${diagnostic ? `: ${diagnostic}` : ""}`);
     }
     if (this.#options.workspaceBootstrap && status === "ready") {
+      if (options.reconcileDesired === false) {
+        return {
+          absent: false,
+          phase: "enrolling",
+          health: "unknown",
+          message: "Workspace provider status is ready; installer reconciliation is paused",
+          lifecycle: claw.observed.lifecycle,
+        };
+      }
       const bootstrap = await this.#options.workspaceBootstrap.inspect(claw, {
         status,
         ...(attachUrl ? { attachUrl } : {}),
