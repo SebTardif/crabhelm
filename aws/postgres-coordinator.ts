@@ -192,6 +192,13 @@ export class AwsCoordinatorDirectory {
   }
 }
 
+export const MAX_PENDING_RUNTIME_FRAMES = 8;
+export const MAX_PENDING_RUNTIME_BYTES = 256 * 1024;
+
+function messageBytes(message: string | ArrayBuffer): number {
+  return typeof message === "string" ? Buffer.byteLength(message) : message.byteLength;
+}
+
 export class AwsClawCoordinator {
   readonly #clawId: string;
   readonly #pool: Pool;
@@ -203,6 +210,10 @@ export class AwsClawCoordinator {
   readonly #scheduleCleanupCallback?: (clawId: string, at: number) => Promise<void>;
   readonly #deliveryOwner = randomUUID();
   readonly #sockets = new Map<AwsRuntimeSocket, RuntimeAttachment>();
+  readonly #observedSockets = new WeakSet<AwsRuntimeSocket>();
+  readonly #closedSockets = new WeakSet<AwsRuntimeSocket>();
+  readonly #pendingSocketMessages = new WeakMap<AwsRuntimeSocket, Array<string | ArrayBuffer>>();
+  readonly #overflowedSockets = new WeakSet<AwsRuntimeSocket>();
   #tail: Promise<void> = Promise.resolve();
 
   constructor(clawId: string, options: AwsCoordinatorDirectoryOptions) {
@@ -221,16 +232,32 @@ export class AwsClawCoordinator {
     return this.#serialize(async () => {
       validateAttachment(input, this.#clawId);
       await this.#assertActive();
+      if (this.#closedSockets.has(socket)) return;
+      if (this.#overflowedSockets.has(socket)) {
+        this.#pendingSocketMessages.delete(socket);
+        try {
+          socket.close(1009, "runtime message buffer exceeded");
+        } catch {
+          // The replacement socket may already be closed.
+        }
+        return;
+      }
+      const replaced: Array<{ socket: AwsRuntimeSocket; attachment: RuntimeAttachment }> = [];
       for (const [existingSocket, attachment] of this.#sockets) {
-        if (attachment.runtimeId !== input.runtimeId) continue;
+        if (existingSocket === socket || attachment.runtimeId !== input.runtimeId) continue;
         attachment.disabled = true;
         this.#sockets.delete(existingSocket);
-        await this.#releaseOffers(attachment);
-        existingSocket.close(4001, "runtime reconnected");
+        this.#pendingSocketMessages.delete(existingSocket);
+        replaced.push({ socket: existingSocket, attachment });
       }
       const attachment = { ...input };
       this.#sockets.set(socket, attachment);
-      this.#bindSocket(socket);
+      this.observeSocket(socket);
+      for (const previous of replaced) {
+        await this.#releaseOffers(previous.attachment);
+        previous.socket.close(4001, "runtime reconnected");
+      }
+      await this.#flushPendingSocketMessages(socket);
       try {
         socket.send(JSON.stringify({
           type: "runtime.ready",
@@ -476,11 +503,13 @@ export class AwsClawCoordinator {
   }
 
   async webSocketClose(socket: AwsRuntimeSocket): Promise<void> {
+    this.#closedSockets.add(socket);
+    this.#pendingSocketMessages.delete(socket);
     return this.#serialize(async () => this.#detachSocket(socket));
   }
 
   async webSocketError(socket: AwsRuntimeSocket): Promise<void> {
-    return this.#serialize(async () => this.#detachSocket(socket));
+    return this.webSocketClose(socket);
   }
 
   async alarm(): Promise<void> {
@@ -1085,6 +1114,7 @@ export class AwsClawCoordinator {
 
   async #detachSocket(socket: AwsRuntimeSocket): Promise<void> {
     const attachment = this.#sockets.get(socket);
+    this.#pendingSocketMessages.delete(socket);
     if (!attachment) return;
     this.#sockets.delete(socket);
     await this.#releaseOffers(attachment);
@@ -1116,11 +1146,13 @@ export class AwsClawCoordinator {
     }
   }
 
-  #bindSocket(socket: AwsRuntimeSocket): void {
+  observeSocket(socket: AwsRuntimeSocket): void {
+    if (this.#observedSockets.has(socket)) return;
+    this.#observedSockets.add(socket);
     if (socket.on) {
       socket.on("message", (data, isBinary) => {
         const message = isBinary === true ? toArrayBuffer(data) : socketText(data);
-        this.#handleSocketEvent(this.webSocketMessage(socket, message), socket);
+        this.#enqueueSocketMessage(socket, message);
       });
       socket.on("close", () => this.#handleSocketEvent(this.webSocketClose(socket), socket));
       socket.on("error", () => this.#handleSocketEvent(this.webSocketError(socket), socket));
@@ -1132,15 +1164,57 @@ export class AwsClawCoordinator {
           ? (event as { data: unknown }).data
           : event;
         const message = typeof data === "string" ? data : toArrayBuffer(data);
-        this.#handleSocketEvent(this.webSocketMessage(socket, message), socket);
+        this.#enqueueSocketMessage(socket, message);
       });
       socket.addEventListener("close", () => this.#handleSocketEvent(this.webSocketClose(socket), socket));
       socket.addEventListener("error", () => this.#handleSocketEvent(this.webSocketError(socket), socket));
     }
   }
 
+  #enqueueSocketMessage(socket: AwsRuntimeSocket, message: string | ArrayBuffer): void {
+    if (this.#overflowedSockets.has(socket) || this.#closedSockets.has(socket)) return;
+    if (this.#sockets.has(socket)) {
+      this.#handleSocketEvent(this.webSocketMessage(socket, message), socket);
+      return;
+    }
+    const pending = this.#pendingSocketMessages.get(socket) ?? [];
+    const bytes = pending.reduce((sum, item) => sum + messageBytes(item), 0) + messageBytes(message);
+    if (pending.length >= MAX_PENDING_RUNTIME_FRAMES || bytes > MAX_PENDING_RUNTIME_BYTES) {
+      this.#pendingSocketMessages.delete(socket);
+      this.#overflowedSockets.add(socket);
+      try {
+        socket.close(1009, "runtime message buffer exceeded");
+      } catch {
+        // The socket may already be closed.
+      }
+      return;
+    }
+    pending.push(message);
+    this.#pendingSocketMessages.set(socket, pending);
+  }
+
+  async #flushPendingSocketMessages(socket: AwsRuntimeSocket): Promise<void> {
+    if (this.#overflowedSockets.has(socket)) {
+      this.#pendingSocketMessages.delete(socket);
+      this.#sockets.delete(socket);
+      return;
+    }
+    const pending = this.#pendingSocketMessages.get(socket);
+    if (!pending || pending.length === 0) return;
+    this.#pendingSocketMessages.delete(socket);
+    for (const message of pending) {
+      await this.#finishSocketEvent(this.#webSocketMessage(socket, message), socket);
+    }
+  }
+
   #handleSocketEvent(operation: Promise<void>, socket: AwsRuntimeSocket): void {
-    void operation.catch((error: unknown) => {
+    void this.#finishSocketEvent(operation, socket);
+  }
+
+  async #finishSocketEvent(operation: Promise<void>, socket: AwsRuntimeSocket): Promise<void> {
+    try {
+      await operation;
+    } catch (error: unknown) {
       console.error(JSON.stringify({
         event: "aws_runtime_socket_failed",
         clawId: this.#clawId,
@@ -1151,7 +1225,7 @@ export class AwsClawCoordinator {
       } catch {
         // The socket may already be closed.
       }
-    });
+    }
   }
 
   #socketAttachment(socket: AwsRuntimeSocket): RuntimeAttachment {

@@ -196,26 +196,13 @@ export async function startAwsServer(options: AwsServerOptions = {}): Promise<Ru
         failNodeResponse(response);
       });
     });
-    server.on("upgrade", (request, socket, head) => {
-      // After Node emits `upgrade`, application code owns socket errors.
-      socket.on("error", () => undefined);
-      if (shuttingDown) {
-        void writeUpgradeResponse(socket, new Response("service unavailable", { status: 503 }));
-        return;
-      }
-      void upgradeRuntimeSocket(
-        request,
-        socket,
-        head,
-        config,
-        env,
-        coordinatorDirectory,
-        webSocketServer,
-        webSockets,
-      ).catch((error: unknown) => {
-        logError("aws_runtime_upgrade_failed", error, { path: safePath(request.url) });
-        if (!socket.destroyed) socket.destroy();
-      });
+    bindAwsRuntimeUpgrade(server, {
+      config,
+      env,
+      coordinators: coordinatorDirectory,
+      webSocketServer,
+      sockets: webSockets,
+      shuttingDown: () => shuttingDown,
     });
 
     await listen(server, config.listen.host, config.listen.port);
@@ -435,6 +422,41 @@ async function sendNodeResponse(
   );
 }
 
+export function bindAwsRuntimeUpgrade(
+  server: Server,
+  dependencies: {
+    config: AwsConfig;
+    env: Env;
+    coordinators: AwsCoordinatorDirectory;
+    webSocketServer: WebSocketServer;
+    sockets: Map<WebSocket, AwsClawCoordinator>;
+    shuttingDown?: () => boolean;
+  },
+): void {
+  const shuttingDown = dependencies.shuttingDown ?? (() => false);
+  server.on("upgrade", (request, socket, head) => {
+    // After Node emits `upgrade`, application code owns socket errors.
+    socket.on("error", () => undefined);
+    if (shuttingDown()) {
+      void writeUpgradeResponse(socket, new Response("service unavailable", { status: 503 }));
+      return;
+    }
+    void upgradeRuntimeSocket(
+      request,
+      socket,
+      head,
+      dependencies.config,
+      dependencies.env,
+      dependencies.coordinators,
+      dependencies.webSocketServer,
+      dependencies.sockets,
+    ).catch((error: unknown) => {
+      logError("aws_runtime_upgrade_failed", error, { path: safePath(request.url) });
+      if (!socket.destroyed) socket.destroy();
+    });
+  });
+}
+
 async function upgradeRuntimeSocket(
   incoming: IncomingMessage,
   socket: Duplex,
@@ -468,6 +490,8 @@ async function upgradeRuntimeSocket(
     webSocket.once("close", () => sockets.delete(webSocket));
     webSocketServer.emit("connection", webSocket, incoming);
     const runtimeSocket = webSocket as unknown as AwsRuntimeSocket;
+    coordinator.observeSocket(runtimeSocket);
+    socket.resume();
     void coordinator.attachSocket(runtimeSocket, authentication.identity).catch((error: unknown) => {
       logError("aws_runtime_attach_failed", error, { clawId: authentication.identity.clawId });
       sockets.delete(webSocket);
