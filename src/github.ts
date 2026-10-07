@@ -87,18 +87,21 @@ export class GitHubRestMemberSource implements GitHubMemberSource {
         throw new Error(`GitHub member discovery failed: HTTP ${response.status} ${safeMessage(payload)}`);
       }
       if (!Array.isArray(payload)) throw new Error("GitHub member discovery returned invalid JSON");
+      let visited = 0;
       for (const value of payload) {
+        visited += 1;
         const member = normalizeMember(value, query);
         if (!member || seen.has(member.id)) continue;
         seen.add(member.id);
         members.push(member);
         if (members.length === this.#maxMembers) {
-          truncated = payload.length === 100;
+          // A short page can exceed the cap; a full page may have a successor.
+          truncated = visited < payload.length || payload.length === 100;
           break;
         }
       }
-      if (payload.length < 100) break;
-      if (members.length >= this.#maxMembers || page >= pageLimit) {
+      if (members.length >= this.#maxMembers || payload.length < 100) break;
+      if (page >= pageLimit) {
         truncated = true;
         break;
       }

@@ -44,6 +44,49 @@ test("GitHub repository import keeps only maintainers and admins", async () => {
   assert.deepEqual(result.members.map((member) => [member.id, member.role]), [[2, "maintain"], [3, "admin"]]);
 });
 
+test("GitHub import reports truncated when the member cap stops on a short page", async () => {
+  const source = new GitHubRestMemberSource({
+    token: "test-token",
+    maxMembers: 150,
+    fetch: async (input) => {
+      const page = new URL(String(input)).searchParams.get("page");
+      const count = page === "1" ? 100 : 80;
+      const start = page === "1" ? 1 : 101;
+      return new Response(JSON.stringify(
+        Array.from({ length: count }, (_, index) => ({
+          id: start + index,
+          login: `member-${start + index}`,
+          type: "User",
+        })),
+      ), { status: 200 });
+    },
+  });
+
+  const result = await source.preview({ scope: "organization", organization: "OpenClaw" });
+  assert.equal(result.members.length, 150);
+  assert.equal(result.truncated, true);
+
+  const exact = new GitHubRestMemberSource({
+    token: "test-token",
+    maxMembers: 150,
+    fetch: async (input) => {
+      const page = new URL(String(input)).searchParams.get("page");
+      const count = page === "1" ? 100 : 50;
+      const start = page === "1" ? 1 : 101;
+      return new Response(JSON.stringify(
+        Array.from({ length: count }, (_, index) => ({
+          id: start + index,
+          login: `exact-${start + index}`,
+          type: "User",
+        })),
+      ), { status: 200 });
+    },
+  });
+  const complete = await exact.preview({ scope: "organization", organization: "OpenClaw" });
+  assert.equal(complete.members.length, 150);
+  assert.equal(complete.truncated, false);
+});
+
 test("GitHub repository discovery bounds scanned pages even when few collaborators match", async () => {
   let requests = 0;
   const source = new GitHubRestMemberSource({

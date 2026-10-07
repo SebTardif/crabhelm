@@ -104,6 +104,7 @@ Typed-name confirmation starts a staged removal. Crabhelm disables ingress, veri
 - Optional first-class ClawRouter policies, epoch-scoped child credentials, desired/observed route health, bounded usage metadata, and exact-route live inference proof; deployment-specific live proof is still required.
 - Optional signed central Slack ingress with DM/app-mention events, persona bindings, threaded delivery, and one-click confirmations; locked Slack-off installations expose no Slack route or credential requirement.
 - GitHub organization import remains disabled in the Cloudflare runtime.
+- GitHub member previews report truncation when the member cap leaves entries unread, including on a short final page; an exactly consumed short page is complete.
 - Backend-native operator authentication through verified Cloudflare Access JWTs or signed ALB OIDC assertions, with signed principal sessions retained for operations.
 - GitHub OAuth authorization-code connection, repository/issue reads, and confirmed issue comments through the controlled wrapper.
 - Per-claw encrypted turn queues, short-lived credential rotation, health, and reconnect over one authenticated outbound WebSocket; no tunnel or inbound child service.
